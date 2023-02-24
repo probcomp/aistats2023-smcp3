@@ -1,5 +1,14 @@
 # SMCP3 Code Submission
 
+This repository contains the code submitted to AISTATS for the paper
+
+```
+SMCP3: Sequential Monte Carlo with Probabilistic Program Proposals
+(Alex Lew*, George Matheos*, Tan Zhi-Xuan, Matin Ghavamizadeh, Nishad Gothoskar, Stuart Russell, Vikash Mansinghka)
+```
+
+to appear at AISTATS 2023.
+
 ## Top-level directory structure
 - `Julia/` contains the code used to run our experiments, not using the automated implementation of SMCP3 in Gen.
 - `Gen/` contains code implementing the automated implementation of SMCP3 in Gen, and implementations of some of our examples models and inference programs using this Gen support for SMCP3.
