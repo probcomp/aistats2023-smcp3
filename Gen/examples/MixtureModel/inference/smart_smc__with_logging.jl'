@@ -1,0 +1,215 @@
+Gen.logsumexp(v::Vector{Any}) = logsumexp(convert(Vector{Float64}, v))
+include("split_merge_proposals.jl")
+
+@kernel function k_targetted_splitmerge(trₜ₋₁, data, n_split_proposals)
+    i = length(get_args(trₜ₋₁)[1]) + 1
+
+    # Incorporate `i` into an existing or new singleton cluster.
+    trₜ¹ ~ loc_opt_incorporate(trₜ₋₁, data)
+    Πₜ¹ = trₜ¹[:partition]
+    cₜ¹ = cluster_containing(Πₜ¹, i)
+
+    # If a new singleton was created, return that clustering.
+    if length(cₜ¹) == 1
+        return (choicemap((:partition, Πₜ¹)), choicemap())
+    end
+
+    # Sample K split.
+    if length(cₜ¹) > 2
+        k_split ~ TracedKernel(sample_split_iterated)(trₜ¹, cₜ¹, i, n_split_proposals)
+        ((split_weight, Π_split, two_split_clusters), k_split_choices, _) = k_split
+    else
+        (split_weight, Π_split, two_split_clusters, k_split_choices) = -Inf, nothing, (nothing, nothing), nothing
+    end
+
+    # Choose the final partition to output.
+    final_partition ~ choose_final_partition(Πₜ¹, split_weight, Π_split, get_merge_partitions_scores_and_pairs(trₜ¹, cₜ¹))
+    (Πₜ², move_idx) = final_partition
+    cₜ² = cluster_containing(Πₜ², i)
+
+    # Sample splitting randomness for L.
+    l_tried_split = length(cₜ²) > 2 # L tries to split if there are \geq 2 points other than i
+    if l_tried_split
+        trace_l_tries_to_split = update(trₜ₋₁.trace, choicemap((:partition, remove(Πₜ², i))))[1]
+        split_rev_rand ~ sample_randomness_for_reverse_split(trace_l_tries_to_split, trₜ₋₁[:partition], setdiff(cₜ², Set([i])), i, n_split_proposals, move_idx)
+    else
+        split_rev_rand = nothing
+    end
+
+    # Return.
+    return (
+        choicemap((:partition, Πₜ²)),
+        l_constraint_choicemap(k_split_choices, split_rev_rand, move_idx, cₜ¹, two_split_clusters[2], Πₜ², n_split_proposals)
+    )
+end
+@kernel function l_targetted_splitmerge(trₜ, data, n_split_proposals)
+    i = length(data)
+    # Remove last datapoint.
+    trₜ₋₁² = update(trₜ, (data[1:end-1],), (UnknownChange(),),
+        choicemap((:partition, remove(trₜ[:partition], i)))
+    )[1]
+    cₜ₋₁² = setdiff(
+        cluster_containing(trₜ[:partition], i),
+        Set([i])
+    )
+    if isempty(cₜ₋₁²)
+        Π = trₜ₋₁²[:partition]
+        return (
+            choicemap((:partition, Π)),
+            choicemap((:trₜ¹ => :idx, length(Π) + 1))
+        )
+    end
+
+    # Sample L split.
+    if length(cₜ₋₁²) > 1
+        l_split ~ TracedKernel(sample_split_iterated)(trₜ₋₁², cₜ₋₁², i, n_split_proposals)
+        ((split_weight, Π_split, two_split_clusters), l_split_choicemap, _) = l_split
+    else
+        (split_weight, Π_split, two_split_clusters, l_split_choicemap) = -Inf, nothing, nothing, nothing
+    end
+
+    # Choose the final partition to output.
+    merge_list = get_merge_partitions_scores_and_pairs(trₜ₋₁², cₜ₋₁²)
+    final_partition ~ choose_final_partition(trₜ₋₁²[:partition], split_weight, Π_split, merge_list)
+    (Πₜ₋₁¹, move_idx) = final_partition
+    trₜ₋₁ = update(trₜ₋₁², choicemap((:partition, Πₜ₋₁¹)))[1]
+
+    # If L did a split, K did a merge.  We must decide which of the 2 pre-merge clusters the new datapoint
+    # was in before K merged.
+    if move_idx == 2
+        c1, c2 = two_split_clusters
+        lp = log_gibbs_probability_point_goes_in_first_cluster(trₜ₋₁, data, c1, c2, i)
+        in_first ~ bernoulli_logscale(lp)
+        c_ = in_first ? c1 : c2 # c_ is the cluster in trₜ₋₁ which i was in, not including i
+        println("A [c1 = $c1 ; c2 = $c2]")
+    else
+        in_first = nothing
+        if move_idx == 1
+            c_ = setdiff(cluster_containing(trₜ[:partition], i), Set([i]))
+            println("B")
+        else
+            # Union of the 2 clusters that got merged together.
+            c_ = setdiff(union(merge_list[move_idx - 2][4]...), Set([i]))
+            println("C")
+        end
+    end
+
+    # Sample splitting randomness for K.
+    k_tried_split = length(c_) >= 2
+    println("c_ = $c_ ; i = $i")
+    if k_tried_split
+        trace_k_tries_to_split = update(trₜ, (data,), (UnknownChange(),), choicemap((:partition, add_to_cluster(Πₜ₋₁¹, c_, i))))[1]
+        split_rev_rand ~ sample_randomness_for_reverse_split(trace_k_tries_to_split, trₜ, union(cₜ₋₁², Set([i])), i, n_split_proposals, move_idx)
+    else
+        split_rev_rand = nothing
+    end
+
+    # Return.
+    return (
+        choicemap((:partition, Πₜ₋₁¹)),
+        k_constraint_choicemap(trₜ, trₜ₋₁, i, two_split_clusters, l_split_choicemap, split_rev_rand, move_idx, in_first, n_split_proposals)
+    )
+end
+function k_constraint_choicemap(trₜ, trₜ₋₁, i, two_split_clusters, l_split_choicemap, split_rev_rand_cm, l_move_idx, in_first, n_split_proposals)
+    cm = choicemap()
+
+    # IDX for Loc-Opt move
+    if l_move_idx == 1
+        old_cluster = setdiff(only(c for c in trₜ[:partition] if i in c), Set([i]))
+        k_merged_into_cluster = nothing
+    elseif l_move_idx == 2
+        if in_first
+            old_cluster = two_split_clusters[1]
+            k_merged_into_cluster = two_split_clusters[2]
+        else
+            old_cluster = two_split_clusters[2]
+            k_merged_into_cluster = two_split_clusters[1]
+        end
+    else # L did a merge / K did a split
+        old_cluster = setdiff(union(two_split_clusters...), Set([i]))
+        k_merged_into_cluster = nothing
+    end
+    cm[:trₜ¹ => :idx] = find_sorted(trₜ₋₁[:partition], old_cluster)
+
+    # K split randomness
+    if !isnothing(split_rev_rand_cm)
+        set_submap!(cm, :k_split, split_rev_rand_cm)
+    end
+
+    # move_idx
+    # println("old_cluster = $old_cluster; k_merged_into_cluster = $k_merged_into_cluster")
+    k_move_idx = opposite_move(l_move_idx, k_merged_into_cluster, trₜ₋₁[:partition])
+    cm[:final_partition => :move_idx] = k_move_idx
+
+    # L split randomness
+    if !isnothing(l_split_choicemap)
+        set_submap!(cm, :split_rev_rand, splitrand_to_revrand(l_split_choicemap, l_move_idx, n_split_proposals))
+    end
+
+    return cm
+end
+function l_constraint_choicemap(k_split_choices, split_rev_rand_cm, k_move_idx, cₜ¹, l_merged_into_cluster, post_K_partition, n_split_proposals)
+    cm = choicemap()
+
+    # L split randomness
+    if !isnothing(split_rev_rand_cm)
+        set_submap!(cm, :l_split, split_rev_rand_cm)
+    end
+
+    # move_idx
+    l_move_idx = opposite_move(k_move_idx, l_merged_into_cluster, post_K_partition)
+    cm[:final_partition => :move_idx] = l_move_idx
+
+    # L split randomness
+    if !isnothing(k_split_choices)
+        revrand = splitrand_to_revrand(k_split_choices, k_move_idx, n_split_proposals)
+        set_submap!(cm, :split_rev_rand, revrand)
+        # ISSUE: it looks like sometimes ths branch is not getting triggered, even though the L branch expects it to!
+    end
+
+    # in_first
+    if k_move_idx > 2
+        # This depends whether L decided that `chap1` was in the same cluster cₜ¹ where we initially put i.
+        # println("split_rev_rand_cm:")
+        # display(split_rev_rand_cm)
+        chap1 = split_rev_rand_cm[(:proposed_split, split_rev_rand_cm[:split_idx]) => :chap1]
+        cm[:in_first] = chap1 in cₜ¹
+    end
+
+    println("constraint choicemap for L:")
+    display(cm)
+
+    return cm
+end
+
+@kernel function choose_final_partition(Π_current, split_weight, Π_split, merge_partitions_scores_and_pairs)
+    all_scores = vcat([0., split_weight], map(x -> x[2], merge_partitions_scores_and_pairs))
+    move_idx ~ categorical(exp.(all_scores .- logsumexp(all_scores)))
+    if move_idx == 1
+        Πₜ = Π_current
+    elseif move_idx == 2
+        Πₜ = Π_split
+    else
+        Πₜ = merge_partitions_scores_and_pairs[move_idx - 2][1]
+    end
+    return (Πₜ, move_idx)
+end
+
+function log_gibbs_probability_point_goes_in_first_cluster(trₜ₋₁, data, c1, c2, i)
+    Πₜ₋₁ = trₜ₋₁[:partition]
+    s1 = update(trₜ₋₁, (data[1:i],), (UnknownChange(),), choicemap((:partition, add_to_cluster(Πₜ₋₁, c1, i))))[2]
+    s2 = update(trₜ₋₁, (data[1:i],), (UnknownChange(),), choicemap((:partition, add_to_cluster(Πₜ₋₁, c2, i))))[2]
+    return s1 - logsumexp([s1, s2])
+end
+
+function opposite_move(move, cluster_k_merged_into, post_fwd_Π)
+    if move == 1
+        return 1
+    elseif move > 2
+        return 2
+    else
+        @assert move == 2 # forward move did a split
+        sorted_Π = sort_by_minidx(post_fwd_Π)
+        return 2 + find(sorted_Π, cluster_k_merged_into)
+    end
+end

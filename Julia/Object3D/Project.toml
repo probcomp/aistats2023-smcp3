@@ -1,0 +1,17 @@
+name = "SMCP3TrackingDemo"
+uuid = "a2bb9723-9452-48ea-a6fe-bcce8a2d9c70"
+version = "0.1.0"
+
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+ColorTypes = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
+CoordinateTransformations = "150eb455-5306-5404-9cee-2592286d6298"
+DifferentiableRenderer = "432295dc-4553-489b-a60c-a90b171d548a"
+Gen = "ea4f424c-a589-11e8-07c0-fd5c91b9da4a"
+GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
+IJulia = "7073ff75-c697-5162-941a-fcdaad2a7d2a"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+MeshCat = "283c5d60-a78f-5afe-a0af-af636b173e11"
+Rotations = "6038ab10-8711-5258-84ad-4b1120ba62dc"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+StatsFuns = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
