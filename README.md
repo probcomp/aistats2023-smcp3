@@ -1,13 +1,17 @@
-# SMCP3 Code Submission
+# Link to the main SMCP<sup>3</sup> repository
 
-This repository contains the code submitted to AISTATS for the paper
+**Please see [this repository](https://github.com/probcomp/GenSMCP3.jl) for our open-source implementation of SMCP<sup>3</sup>, and pedagogical content on SMCP<sup>3</sup>.**
+
+
+# SMCP<sup>3</sup> Code Submission
+
+This repository contains the code used to generate the results and figures for the paper
 
 ```
 SMCP3: Sequential Monte Carlo with Probabilistic Program Proposals
 (Alex Lew*, George Matheos*, Tan Zhi-Xuan, Matin Ghavamizadeh, Nishad Gothoskar, Stuart Russell, Vikash Mansinghka)
+AISTATS 2023
 ```
-
-to appear at AISTATS 2023.
 
 ## Top-level directory structure
 - `Julia/` contains the code used to run our experiments, not using the automated implementation of SMCP3 in Gen.
